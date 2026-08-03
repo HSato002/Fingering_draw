@@ -933,6 +933,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   function download(filename, text, mime) {
     const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+    downloadBlob(filename, blob);
+  }
+  function downloadBlob(filename, blob) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;
@@ -943,25 +946,37 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // ───────────────────────── 終了処理 ──
-  function endSession() {
+  async function endSession() {
     if (ended) return;
     ended = true;
     endTime = new Date();
     if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
     const elapsedMs = (startTime ? endTime.getTime() - startTime.getTime() : 0);
     $('#clock').textContent = fmtElapsed(elapsedMs);
+    $('#endBtn').disabled = true;
 
     const tag = 'player' + (playerNo ?? 'X') + '_song' + (songNo ?? 'X');
-    download(baseName + '_' + tag + '_fingering.csv', '\ufeff' + buildCsv(),
-      'text/csv;charset=utf-8');
-    download(baseName + '_' + tag + '_time.txt', buildTimeTxt(),
-      'text/plain;charset=utf-8');
+    const csvName = baseName + '_' + tag + '_fingering.csv';
+    const txtName = baseName + '_' + tag + '_time.txt';
+    const zipName = baseName + '_' + tag + '.zip';
+
+    try {
+      // CSVとTXTを1つのZIPにまとめて出力
+      const zip = new JSZip();
+      zip.file(csvName, '\ufeff' + buildCsv());
+      zip.file(txtName, buildTimeTxt());
+      const blob = await zip.generateAsync({ type: 'blob' });
+      downloadBlob(zipName, blob);
+      $('#doneFiles').textContent = zipName + ' を書き出しました（' + csvName + ' と ' + txtName + ' を含む）。';
+    } catch (e) {
+      // ZIP生成に失敗した場合はCSVとTXTを個別に書き出す
+      download(csvName, '\ufeff' + buildCsv(), 'text/csv;charset=utf-8');
+      download(txtName, buildTimeTxt(), 'text/plain;charset=utf-8');
+      $('#doneFiles').textContent = 'ZIPを作成できなかったため、CSVとTXTを個別に書き出しました。';
+    }
 
     $('#doneTime').textContent = fmtElapsed(elapsedMs);
-    $('#doneFiles').textContent =
-      baseName + '_' + tag + '_fingering.csv ／ ' + baseName + '_' + tag + '_time.txt を書き出しました。';
     $('#doneScreen').hidden = false;
-    $('#endBtn').disabled = true;
   }
 
   // ───────────────────────── プレイヤー選択 → 楽曲選択 ──
