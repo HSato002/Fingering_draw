@@ -236,13 +236,26 @@
 <div id="songScreen" class="screen" hidden>
   <div class="card">
     <h2>楽曲を選択</h2>
-    <p>番号を選ぶと計測を開始し、対応する楽譜を表示します。</p>
+    <p>番号を選ぶと、次にナンバーを選択します。</p>
     <div class="player-grid">
       <button class="player-btn song-btn" data-song="1">1</button>
       <button class="player-btn song-btn" data-song="2">2</button>
       <button class="player-btn song-btn" data-song="3">3</button>
       <button class="player-btn song-btn" data-song="4">4</button>
       <button class="player-btn song-btn" data-song="5">5</button>
+    </div>
+  </div>
+</div>
+
+<!-- ナンバー選択画面（楽曲選択の後に表示。選択で計測開始＆楽譜読み込み） -->
+<div id="numberScreen" class="screen" hidden>
+  <div class="card">
+    <h2>ナンバーを選択</h2>
+    <p>番号を選ぶと計測を開始し、対応する楽譜を表示します。</p>
+    <div class="player-grid">
+      <button class="player-btn number-btn" data-number="1">1</button>
+      <button class="player-btn number-btn" data-number="2">2</button>
+      <button class="player-btn number-btn" data-number="3">3</button>
     </div>
   </div>
 </div>
@@ -298,6 +311,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // 計測
   let playerNo = null;
   let songNo = null;
+  let numberNo = null;
   let startTime = null;
   let endTime = null;
   let clockTimer = null;
@@ -926,6 +940,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return [
       'プレイヤー: ' + (playerNo ?? '-'),
       '楽曲: ' + (songNo ?? '-'),
+      'ナンバー: ' + (numberNo ?? '-'),
       '開始時刻: ' + (startTime ? fmtClock(startTime) : '-'),
       '終了時刻: ' + (endTime ? fmtClock(endTime) : '-'),
       '計測時間: ' + fmtElapsed(elapsedMs) + '（' + (elapsedMs / 1000).toFixed(1) + ' 秒）'
@@ -955,10 +970,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $('#clock').textContent = fmtElapsed(elapsedMs);
     $('#endBtn').disabled = true;
 
-    const tag = 'player' + (playerNo ?? 'X') + '_song' + (songNo ?? 'X');
-    const csvName = baseName + '_' + tag + '_fingering.csv';
-    const txtName = baseName + '_' + tag + '_time.txt';
-    const zipName = baseName + '_' + tag + '.zip';
+    const base = 'player' + (playerNo ?? 'X') + '_song' + (songNo ?? 'X') + '_No' + (numberNo ?? 'X');
+    const csvName = base + '_fingering.csv';
+    const txtName = base + '_time.txt';
+    const zipName = base + '.zip';
 
     try {
       // CSVとTXTを1つのZIPにまとめて出力
@@ -989,14 +1004,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function selectSong(n) {
     songNo = n;
     $('#songScreen').hidden = true;
-    startTimer();                 // 楽曲選択の瞬間に計測開始
-    $('#endBtn').disabled = false;
-    loadSong(n);                  // 対応するMusicXMLを読み込んで表示
+    $('#numberScreen').hidden = false;
+    status('楽曲 ' + n + ' を選択しました。ナンバーを選んでください。');
   }
-  document.querySelectorAll('.player-btn').forEach(b =>
+  function selectNumber(n) {
+    numberNo = n;
+    $('#numberScreen').hidden = true;
+    startTimer();                 // ナンバー選択の瞬間に計測開始
+    $('#endBtn').disabled = false;
+    loadSong(songNo);             // 対応するMusicXMLを読み込んで表示
+  }
+  document.querySelectorAll('[data-player]').forEach(b =>
     b.addEventListener('click', () => selectPlayer(b.dataset.player)));
-  document.querySelectorAll('.song-btn').forEach(b =>
+  document.querySelectorAll('[data-song]').forEach(b =>
     b.addEventListener('click', () => selectSong(b.dataset.song)));
+  document.querySelectorAll('[data-number]').forEach(b =>
+    b.addEventListener('click', () => selectNumber(b.dataset.number)));
   $('#endBtn').addEventListener('click', endSession);
   $('#restartBtn').addEventListener('click', () => location.reload());
 
