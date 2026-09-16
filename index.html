@@ -68,6 +68,12 @@
   }
   .finger.erase { font-size: .78rem; font-family: inherit; }
   .finger.erase[aria-pressed="true"] { background: var(--danger); border-color: var(--danger); }
+  .hand {
+    min-width: 40px; height: 38px; padding: 0 10px; border-radius: 8px;
+    font-size: .95rem; font-weight: 600;
+    border: 1.5px solid var(--ink-soft); background: var(--paper);
+  }
+  .hand[aria-pressed="true"] { background: var(--pencil); border-color: var(--pencil); color: #fff; }
   .hint { font-size: .72rem; color: var(--ink-soft); }
 
   #zoomLabel { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; font-size: .85rem; }
@@ -159,6 +165,12 @@
   .player-btn:hover { background: var(--pencil); color: #fff; }
   .done-time { font-size: 1.6rem; font-variant-numeric: tabular-nums; color: var(--ink); margin: 6px 0 2px; }
   .done-files { font-size: .82rem; color: var(--ink-soft); margin-bottom: 20px; }
+  #sendBtn {
+    background: var(--pencil); border-color: var(--pencil); color: #fff; font-weight: 600;
+    margin-bottom: 10px;
+  }
+  #sendBtn:hover { filter: brightness(.94); }
+  #sendBtn:disabled { background: var(--paper); color: var(--ink); border-color: var(--line); }
 
   @media (max-width: 640px) {
     header, .toolbar, #status, #sheetWrap { padding-left: 12px; padding-right: 12px; }
@@ -183,6 +195,12 @@
     <button class="finger" data-finger="4" aria-pressed="false">4</button>
     <button class="finger" data-finger="5" aria-pressed="false">5</button>
     <span class="hint">キー 1–5</span>
+  </div>
+  <div class="divider"></div>
+  <div class="group" role="radiogroup" aria-label="手の左右の選択">
+    <button class="hand" data-hand="L" aria-pressed="false">左</button>
+    <button class="hand" data-hand="R" aria-pressed="true">右</button>
+    <span class="hint">キー L / R</span>
   </div>
   <div class="divider"></div>
   <div class="group" role="radiogroup" aria-label="入力ツールの選択">
@@ -266,6 +284,8 @@
     <h2>計測を終了しました</h2>
     <div class="done-time" id="doneTime">00:00:00</div>
     <div class="done-files" id="doneFiles">CSVとTXTを書き出しました。</div>
+    <button id="sendBtn">サーバーに送信</button>
+    <div class="done-files" id="sendStatus"></div>
     <button id="restartBtn">新しい計測を始める</button>
   </div>
 </div>
@@ -300,6 +320,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   let xmlDoc = null;          // 唯一の真実：このDOMを編集して再描画＆書き出し
   let xmlIndex = null;        // key -> [<note>要素]
   let currentFinger = '1';
+  let currentHand = 'R';      // L | R（左手／右手）
   let currentTool = 'write';  // write | change | none | add | erase
   let zoom = 1.0;
   let baseName = 'score';
@@ -316,6 +337,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   let endTime = null;
   let clockTimer = null;
   let ended = false;
+
+  // 送信先（Google Apps ScriptのウェブアプリURL）。/exec で終わるURLをここに貼り付ける。
+  // 例: const SUBMIT_URL = 'https://script.google.com/macros/s/AKfy.../exec';
+  const SUBMIT_URL = '';
+  let lastZipBlob = null;   // 送信用に保持する生成済みZIP
+  let lastZipName = '';
 
   const $ = (sel) => document.querySelector(sel);
   const sheet = $('#sheet');
@@ -471,12 +498,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return null;
   }
 
-  // 注記から<fingering>を同期。
-  // 単一指かつ和音でない音のみOSMDに描かせ、和音・なし・指替えはオーバーレイで描く。
+  // すべての運指ラベル（L1 など）はオーバーレイで描くため、OSMDの<fingering>は使わない。
+  // 念のため既存の<fingering>があれば取り除く。
   function syncFingeringXml(noteEl) {
-    const a = annos.get(noteEl);
-    if (a && !a.none && a.fingers.length === 1 && !inChord(noteEl)) setFingering(noteEl, a.fingers[0]);
-    else setFingering(noteEl, null);
+    setFingering(noteEl, null);
   }
 
   // 音名（C#5 等）→ pitch要素を構築（追加音用）
@@ -558,31 +583,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
                 try { gn.setColor && gn.setColor('#1d4ed8', { applyToNoteheads: true, applyToStem: true }); } catch (e) {}
               }
 
-              // 位置の基準：和音はその音自身の符頭、単音は音符全体
-              let refEl = isChord ? noteheadEl(gn) : null;
+              // 位置の基準：常にその音自身の符頭（なければ音符全体）
+              let refEl = noteheadEl(gn);
               if (!refEl) { try { refEl = gn.getSVGGElement ? gn.getSVGGElement() : null; } catch (e) {} }
               if (!refEl) return;
               let box;
               try { box = refEl.getBBox(); } catch (e) { return; }
 
-              // 描く文字列を決定
+              // 描く文字列を決定（すべての運指ラベルをオーバーレイで描画）
               let str = null, color = '#2557c7';
               if (a.none) { str = '×'; color = '#b3402e'; }
               else if (a.fingers.length >= 2) { str = a.fingers[0] + '→' + a.fingers[1]; }
-              else if (a.fingers.length === 1) {
-                // 単音の単一指はOSMDが上に描画済み → スキップ。和音はここで個別に描く
-                if (isChord) str = a.fingers[0]; else str = null;
-              }
+              else if (a.fingers.length === 1) { str = a.fingers[0]; }
               if (str == null) return;
 
+              const sz = str === '×' ? 4.2 : (str.length > 2 ? 2.8 : 3.2);
               if (isChord) {
-                // 各符頭の右側に表示（縦に重ならないよう個別配置）
+                // 和音は各符頭の右側に個別配置
                 addText(layer, NS, box.x + box.width + 2, box.y + box.height * 0.85,
-                  str, color, str.length > 1 ? 3.0 : 3.4, 'start');
+                  str, color, sz, 'start');
               } else {
-                // 単音は音符の上に表示
+                // 単音は音符（符頭）の上に表示
                 addText(layer, NS, box.x + box.width / 2, box.y - 6,
-                  str, color, str === '×' ? 4.2 : 3.4, 'middle');
+                  str, color, sz, 'middle');
               }
             });
           });
@@ -726,8 +749,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } else if (currentTool === 'change') {
       const a = getAnno(noteEl, true);
       a.none = false;
-      if (a.fingers.length === 0) a.fingers = [currentFinger];
-      else a.fingers = [a.fingers[0], currentFinger];
+      const tok = currentHand + currentFinger;
+      if (a.fingers.length === 0) a.fingers = [tok];
+      else a.fingers = [a.fingers[0], tok];
       syncFingeringXml(noteEl);
       status(where + ' → 運指 ' + a.fingers.join('→'), 'pencil');
     } else if (currentTool === 'add') {
@@ -740,9 +764,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       status(where + ' に追加音 ' + input.toUpperCase() + '（青・正誤F）を配置しました。', 'pencil');
     } else { // write
       const a = getAnno(noteEl, true);
-      a.none = false; a.fingers = [currentFinger];
+      a.none = false; a.fingers = [currentHand + currentFinger];
       syncFingeringXml(noteEl);
-      status(where + ' → 指番号 ' + currentFinger, 'pencil');
+      status(where + ' → 運指 ' + a.fingers[0], 'pencil');
     }
 
     updateCount();
@@ -842,11 +866,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     document.querySelectorAll('.finger').forEach(b =>
       b.setAttribute('aria-pressed', String(b.dataset.finger === f)));
     if (currentTool === 'write' || currentTool === 'change')
-      status('指番号 ' + f + ' を選択中。音符をクリックして記入します。');
+      status('運指 ' + currentHand + currentFinger + ' を選択中。音符をクリックして記入します。');
+  }
+  function selectHand(h) {
+    currentHand = h;
+    document.querySelectorAll('.hand').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.hand === h)));
+    if (currentTool === 'write' || currentTool === 'change')
+      status((h === 'L' ? '左手' : '右手') + 'を選択中（運指 ' + currentHand + currentFinger + '）。', 'pencil');
   }
   const TOOL_MSG = {
-    write:  '記入モード：選んだ指番号を音符に書き込みます。',
-    change: '指替えモード：既に指番号がある音符をクリックすると2つ目を足し「a→b」で表示します。',
+    write:  '記入モード：選んだ手＋指番号（例 R1）を音符に書き込みます。',
+    change: '指替えモード：既に運指がある音符をクリックすると2つ目を足し「R1→L2」のように表示します。',
     none:   'なしモード：演奏されなかった音符をクリックすると×を表示し、運指は空で出力します。',
     add:    '追加音モード：楽譜にない音を弾いた箇所をクリックし、音名を入力すると青い音符（正誤F）を配置します。',
     erase:  '消すモード：音符の記入・追加音を削除します。'
@@ -860,12 +891,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   document.querySelectorAll('.finger').forEach(b =>
     b.addEventListener('click', () => selectFinger(b.dataset.finger)));
+  document.querySelectorAll('.hand').forEach(b =>
+    b.addEventListener('click', () => selectHand(b.dataset.hand)));
   document.querySelectorAll('.tool').forEach(b =>
     b.addEventListener('click', () => selectTool(b.dataset.tool)));
 
   document.addEventListener('keydown', e => {
     if (e.target.closest('input, textarea')) return;
     if (/^[1-5]$/.test(e.key)) selectFinger(e.key);
+    else if (e.key.toLowerCase() === 'l') selectHand('L');
+    else if (e.key.toLowerCase() === 'r') selectHand('R');
     else if (e.key.toLowerCase() === 'e') selectTool('erase');
   });
 
@@ -981,6 +1016,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       zip.file(csvName, '\ufeff' + buildCsv());
       zip.file(txtName, buildTimeTxt());
       const blob = await zip.generateAsync({ type: 'blob' });
+      lastZipBlob = blob; lastZipName = zipName;
       downloadBlob(zipName, blob);
       $('#doneFiles').textContent = zipName + ' を書き出しました（' + csvName + ' と ' + txtName + ' を含む）。';
     } catch (e) {
@@ -1022,6 +1058,52 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     b.addEventListener('click', () => selectNumber(b.dataset.number)));
   $('#endBtn').addEventListener('click', endSession);
   $('#restartBtn').addEventListener('click', () => location.reload());
+
+  // ───────────────────────── サーバー送信（Google Drive / Apps Script） ──
+  function setSendStatus(msg, kind) {
+    const el = $('#sendStatus');
+    el.textContent = msg;
+    el.style.color = kind === 'warn' ? 'var(--danger)'
+      : kind === 'ok' ? 'var(--pencil)' : 'var(--ink-soft)';
+  }
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]); // "data:...;base64," を除去
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+  async function sendToServer() {
+    if (!SUBMIT_URL) {
+      setSendStatus('送信先が未設定です。コード内の SUBMIT_URL に Apps ScriptのURL（…/exec）を設定してください。', 'warn');
+      return;
+    }
+    if (!lastZipBlob) { setSendStatus('送信するファイルがありません。', 'warn'); return; }
+    const btn = $('#sendBtn');
+    btn.disabled = true;
+    setSendStatus('送信中…');
+    try {
+      const b64 = await blobToBase64(lastZipBlob);
+      const payload = JSON.stringify({ filename: lastZipName, mimeType: 'application/zip', data: b64 });
+      // Content-Typeを text/plain にしてCORSプリフライトを避ける（Apps Scriptは e.postData.contents で受け取る）
+      const res = await fetch(SUBMIT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: payload,
+      });
+      const text = await res.text();
+      let ok = res.ok;
+      try { const j = JSON.parse(text); ok = ok && j.status !== 'error'; } catch (e) {}
+      if (!ok) throw new Error(text.slice(0, 200) || ('HTTP ' + res.status));
+      setSendStatus('送信が完了しました。ドライブのフォルダに保存されました。', 'ok');
+    } catch (e) {
+      setSendStatus('送信できませんでした：' + e.message +
+        '（ドライブに保存されている場合もあります。フォルダをご確認ください）', 'warn');
+      btn.disabled = false;
+    }
+  }
+  $('#sendBtn').addEventListener('click', sendToServer);
 
 
 
